@@ -1,0 +1,7 @@
+# TRINETRA backend — Phase 1 (synthetic cyber environment)
+#
+# Phase 1 has NO third-party dependencies. Everything here runs on the
+# Python 3 standard library (dataclasses, enum, math, json, typing).
+# Requires Python 3.9 or newer.
+#
+# Install nothing; just run:  python3 run_demo.py
