@@ -7,7 +7,7 @@ reproduces the exact same starting point regardless of what was mutated.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.models.environment import EnvironmentState
 from app.simulator.scenarios import DEFAULT_SCENARIO, SCENARIO_BUILDERS, available_scenarios
@@ -16,9 +16,19 @@ from app.simulator.scenarios import DEFAULT_SCENARIO, SCENARIO_BUILDERS, availab
 class CyberEnvironment:
     """A deterministic, in-memory model of the Nexora Systems estate."""
 
-    def __init__(self, scenario: str = DEFAULT_SCENARIO) -> None:
+    def __init__(
+        self,
+        scenario: str = DEFAULT_SCENARIO,
+        faults: Optional[Dict[str, bool]] = None,
+    ) -> None:
         self._scenario = self._validate(scenario)
         self._state = SCENARIO_BUILDERS[self._scenario]()
+        # Deterministic fault injection for response tools; survives reset().
+        self.faults: Dict[str, bool] = dict(faults or {})
+
+    def set_fault(self, name: str, enabled: bool = True) -> None:
+        """Enable or disable a named, deterministic tool failure."""
+        self.faults[name] = enabled
 
     @property
     def scenario(self) -> str:
