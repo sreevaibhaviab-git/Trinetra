@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 class Phase(str, Enum):
     OBSERVE = "OBSERVE"
+    COMPLETE = "COMPLETE"
     DECIDE = "DECIDE"
     ACT = "ACT"
     EVALUATE = "EVALUATE"
@@ -19,12 +20,15 @@ class Phase(str, Enum):
 
 
 class AgentStatus(str, Enum):
+    IDLE = "IDLE"
     INVESTIGATING = "INVESTIGATING"
     CONTAINING = "CONTAINING"
     VERIFYING = "VERIFYING"
     CONTAINED = "CONTAINED"
     NEEDS_HUMAN = "NEEDS_HUMAN"
+    EMERGENCY_STOPPED = "EMERGENCY_STOPPED"
     MAX_STEPS_REACHED = "MAX_STEPS_REACHED"
+    ERROR = "ERROR"
 
 
 @dataclass
@@ -58,6 +62,7 @@ class AgentState:
     latest_verification: Optional[Dict[str, Any]] = None
     events: List[AgentEvent] = field(default_factory=list)
     summary: str = ""
+    final_outcome: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,4 +78,5 @@ class AgentState:
             "latest_verification": self.latest_verification,
             "events": [e.to_dict() for e in self.events],
             "summary": self.summary,
+            "final_outcome": self.final_outcome,
         }

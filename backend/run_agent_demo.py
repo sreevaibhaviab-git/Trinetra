@@ -1,9 +1,11 @@
-"""Phase 3 demo: hand Trinetra a goal and let it run.
+"""Phase 3 demo: hand Trinetra a goal and let it defend the live range.
 
     cd backend && ./venv/bin/python run_agent_demo.py
 
-Requires GEMINI_API_KEY (see .env.example). The tool sequence below is chosen by
-the model at runtime — nothing in this file scripts the investigation.
+Requires GEMINI_API_KEY (see .env.example). Nothing in this file scripts the
+investigation: the goal below is the agent's only input, and every tool call and
+containment decision comes from the model at runtime. The Red Engine keeps
+running on the same simulation clock while the agent works.
 """
 
 from __future__ import annotations
@@ -16,62 +18,68 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app.agent import AgentConfigurationError, TrinetraAgent  # noqa: E402
 from app.agent.models import AgentEvent, Phase  # noqa: E402
 from app.simulator.environment import CyberEnvironment  # noqa: E402
-from app.tools import IAM_FAULT  # noqa: E402
+from app.simulator.red_engine import RedAttackEngine  # noqa: E402
+from app.tools import verify_environment  # noqa: E402
 
 GOAL = (
-    "Investigate the active security incident, contain confirmed threats, protect "
-    "critical assets, and avoid unnecessary production disruption."
+    "Keep Nexora operational. Investigate the active incident, contain confirmed "
+    "threats, protect critical assets, and minimize unnecessary disruption."
 )
 
-LABEL = {
-    Phase.OBSERVE: "OBSERVE",
-    Phase.DECIDE: "DECIDE",
-    Phase.ACT: "ACT",
-    Phase.EVALUATE: "EVALUATE",
-    Phase.ADAPT: "ADAPT",
-    Phase.RESULT: "RESULT",
-    Phase.FAILED: "FAILED",
-    Phase.FINAL: "FINAL",
-}
+# Simulated seconds of incident that have already elapsed when the agent is
+# called in. Enough for observable evidence; the operation is far from finished.
+WARMUP_SECONDS = 150
 
 
 def printer(event: AgentEvent) -> None:
-    call = ""
-    if event.tool:
-        call = f"  {event.tool}({event.target or ''})"
-    print(f"[{LABEL[event.phase]:<8}] step {event.step:02d}{call}")
-    print(f"           {event.message}")
+    call = f"  {event.tool}({event.target or ''})" if event.tool else ""
+    print(f"\n[{event.phase.value}] step {event.step:02d}{call}")
+    print(f"  {event.message}")
 
 
 def main() -> int:
-    env = CyberEnvironment("credential_compromise")
-    env.reset()
-    env.set_fault(IAM_FAULT)  # revoke_token('oauth-8492') will fail once attempted
+    env = CyberEnvironment("nexora_baseline")
+    red = RedAttackEngine(env)
+    red.launch_scenario("operation_maya")
+    env.advance_time(WARMUP_SECONDS)
 
-    print("TRINETRA AGENT STARTED\n")
-    print(f"GOAL\n{GOAL}\n")
+    print("TRINETRA AUTONOMOUS RESPONSE")
+    print(f"\nGOAL\n  {GOAL}")
+    print(
+        f"\nRANGE\n  {env.scenario} at {env.get_current_time()[11:19]} — "
+        f"{len(env.state.telemetry)} telemetry events, "
+        f"resilience {env.state.safety.resilience_score}"
+    )
 
     try:
         agent = TrinetraAgent(env, on_event=printer)
     except AgentConfigurationError as exc:
-        print(f"CONFIGURATION ERROR\n{exc}")
+        print(f"\nCONFIGURATION ERROR\n  {exc}")
         return 2
 
     state = agent.run(GOAL)
-    v = state.latest_verification or {}
 
-    print("\nFINAL STATUS")
-    print(f"  {state.status.value}")
-    print(f"  Risk Score   : {v.get('risk_score', 'n/a')}")
-    print(f"  Contained    : {v.get('contained', 'n/a')}")
-    print(f"  Steps        : {state.step}")
-    print(f"  Tools called : {len(state.tools_called)}")
-    print(f"  Actions      : {[a['tool'] + ':' + a['target'] for a in state.actions_taken]}")
-    print(f"  Failures     : {[f['tool'] + ':' + f['error'] for f in state.failed_actions]}")
-    print(f"  Adaptations  : {len(state.adaptations)}")
-    if state.summary:
-        print(f"\nSUMMARY\n  {state.summary}")
-    return 0
+    # Final word comes from the tools, not from the agent's own claim.
+    verification = verify_environment(env)
+    print("\n" + "=" * 68)
+    print("FINAL")
+    print(f"  Status      : {state.status.value}")
+    print(f"  Contained   : {verification['contained']}")
+    print(f"  Risk        : {verification['risk_score']}")
+    print(f"  Resilience  : {verification['resilience_score']}")
+    print(f"  Steps       : {state.step}")
+    print(f"  Tools called: {len(state.tools_called)}")
+    print(f"  Actions     : {len(state.actions_taken)} "
+          f"{[a['tool'] + ':' + str(a['target']) for a in state.actions_taken]}")
+    print(f"  Failed      : {len(state.failed_actions)} "
+          f"{[f['tool'] + ':' + f['error'] for f in state.failed_actions]}")
+    print(f"  Adaptations : {len(state.adaptations)}")
+    print(f"  Simulation  : {env.get_current_time()[11:19]}, "
+          f"attack {red.get_attack_status()['status']}")
+    if state.final_outcome:
+        print(f"\nOUTCOME\n  {state.final_outcome}")
+
+    return 0 if verification["contained"] or state.status.value == "EMERGENCY_STOPPED" else 1
 
 
 if __name__ == "__main__":

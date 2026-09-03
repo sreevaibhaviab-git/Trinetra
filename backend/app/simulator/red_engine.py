@@ -36,6 +36,7 @@ from app.models.environment import (
     RegisteredDevice,
     ScheduledEvent,
     ScheduledEventStatus,
+    SecurityAlert,
     Session,
     SessionStatus,
     Severity,
@@ -296,11 +297,51 @@ class RedAttackEngine:
         if not self._governor_allows():
             return
         stage = STAGES_BY_KEY[stage_key]
+        # Past the foothold stages the operation needs a live route. Blue closing
+        # both the token and the session is what disrupts it.
+        if stage_key not in ("supplier_contact", "rogue_device", "oauth_grant", "cloud_privilege"):
+            token_ok, session_ok = self._route()
+            if not (token_ok or session_ok):
+                self._disrupt(event.scheduled_at, "no usable credential or session remains")
+                return
         applied = self._MUTATIONS[stage_key](self, stage, event)
         if not applied:
             return
         self._record_stage(stage_key)
+        self._raise_alert(stage, event)
         self._apply_cost(stage.resilience_cost)
+
+    def _route(self) -> tuple:
+        """Whether the rogue token and the rogue session are still usable."""
+        state = self._env.state
+        token = state.tokens.get(ROGUE_TOKEN_ID)
+        session = state.sessions.get(ROGUE_SESSION_ID)
+        return (
+            token is not None and token.status is TokenStatus.ACTIVE,
+            session is not None and session.status is SessionStatus.ACTIVE,
+        )
+
+    def _raise_alert(self, stage: AttackStage, event: ScheduledEvent) -> None:
+        """Nexora's own monitoring firing on the evidence, not on scenario truth."""
+        if stage.severity not in (Severity.HIGH, Severity.CRITICAL):
+            return
+        state = self._env.state
+        state.security_alerts.append(
+            SecurityAlert(
+                alert_id=f"alert-{1000 + len(state.security_alerts) + 1}",
+                timestamp=event.scheduled_at,
+                rule_id=f"NX-{stage.source.value[:3]}-{stage.offset_seconds:03d}",
+                title=stage.message.split(".")[0],
+                severity=stage.severity,
+                source=stage.source.value.lower(),
+                description=stage.message,
+                related_users=[TARGET_USER],
+                related_assets=[stage.related_asset],
+                related_sessions=[ROGUE_SESSION_ID],
+                related_events=[],
+                evidence=dict(stage.metadata),
+            )
+        )
 
     # -- stage effects ----------------------------------------------------
 
@@ -698,6 +739,33 @@ class RedAttackEngine:
     def _data_query(self, stage: AttackStage, event: ScheduledEvent) -> bool:
         state = self._env.state
         at = event.scheduled_at
+        database = state.assets["customer-database"]
+        if database.restricted or database.status == "restricted":
+            # Blue protected the store first: the read is refused at the policy.
+            state.cloud_events.append(
+                CloudEvent(
+                    event_id="cloud-2603",
+                    timestamp=at,
+                    actor=TARGET_USER,
+                    asset_id="customer-database",
+                    service="rds",
+                    action="rds-data:ExecuteStatement",
+                    resource="arn:aws:rds:ap-south-1:418322947610:cluster:nexora-customers",
+                    outcome=EventOutcome.DENIED,
+                    source_ip=IP_RED_INFRA,
+                    session_id=ROGUE_SESSION_ID,
+                    user_agent="psql/16.2",
+                    details={
+                        "statement": "SELECT * FROM customers",
+                        "rows_returned": 0,
+                        "deny_reason": "data_protection_policy: access refused",
+                    },
+                )
+            )
+            self._env.state.hidden.red_engine_notes.append(
+                f"{at}: data stage refused — customer-database is under protection."
+            )
+            return False
         state.cloud_events.extend(
             [
                 CloudEvent(
@@ -747,6 +815,30 @@ class RedAttackEngine:
     def _exfiltration(self, stage: AttackStage, event: ScheduledEvent) -> bool:
         state = self._env.state
         at = event.scheduled_at
+        endpoint = state.endpoints.get(ENDPOINT_ARJUN)
+        if endpoint is not None and endpoint.isolated:
+            # Blue isolated the endpoint: nothing leaves it.
+            state.network_events.append(
+                NetworkEvent(
+                    event_id="net-2702",
+                    timestamp=at,
+                    source_ip=IP_RED_INFRA,
+                    source_geo=MOSCOW,
+                    destination_asset="api-gateway",
+                    destination_port=443,
+                    protocol="tcp",
+                    action="denied",
+                    bytes_in=0,
+                    bytes_out=0,
+                    duration_seconds=0,
+                    tls_fingerprint=JA3_UNKNOWN_LINUX,
+                    details={"rule": "host-isolation: endpoint quarantined"},
+                )
+            )
+            self._env.state.hidden.red_engine_notes.append(
+                f"{at}: egress stage blocked — {ENDPOINT_ARJUN} is isolated."
+            )
+            return False
         state.dns_events.append(
             DnsEvent(
                 event_id="dns-2701",

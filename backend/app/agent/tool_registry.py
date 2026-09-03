@@ -1,31 +1,24 @@
-"""Allowlisted tool surface exposed to the model.
+"""The tool surface exposed to the model.
 
-Only the Phase 2 functions appear here. Anything the model asks for that is not
-in `REGISTRY`, or any argument that is not declared, is refused before it can
-reach the environment.
+Every entry is derived from `BLUE_TOOL_REGISTRY` — the Phase 2B allowlist — so
+the agent can reach exactly the Blue tools and nothing else. Signatures are read
+from the functions themselves, which keeps the declarations honest: an argument
+the tool does not accept cannot be declared, and one it requires cannot be
+omitted.
+
+The Red Engine, its hidden state and the simulator's own controls are not
+importable from here on purpose.
 """
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Tuple
 
 from app.simulator.environment import CyberEnvironment
-from app.tools import (
-    block_ip,
-    disable_user,
-    get_active_sessions,
-    get_asset_status,
-    get_cloud_activity,
-    get_environment_summary,
-    get_network_activity,
-    get_recent_logins,
-    get_tokens,
-    restrict_asset,
-    revoke_token,
-    terminate_session,
-    verify_environment,
-)
+from app.tools import BLUE_TOOL_REGISTRY
 
 Kind = str  # "investigation" | "defensive" | "verification"
 
@@ -38,110 +31,56 @@ class ToolSpec:
     fn: Callable[..., Any]
     params: Dict[str, str]  # arg name -> "string" | "integer"
     required: Tuple[str, ...] = ()
+    impact: str = "NONE"
 
 
-REGISTRY: Dict[str, ToolSpec] = {
-    t.name: t
-    for t in (
-        ToolSpec(
-            "get_environment_summary",
-            "investigation",
-            "High-level posture of the estate: counts, incident status, open alerts, blocked IPs.",
-            get_environment_summary,
-            {},
-        ),
-        ToolSpec(
-            "get_recent_logins",
-            "investigation",
-            "Sign-in events with source IP, geo, device and MFA detail. Optionally filter by user.",
-            get_recent_logins,
-            {"user_id": "string", "limit": "integer"},
-        ),
-        ToolSpec(
-            "get_active_sessions",
-            "investigation",
-            "Currently active sessions with device, network and geo attribution.",
-            get_active_sessions,
-            {"user_id": "string"},
-        ),
-        ToolSpec(
-            "get_tokens",
-            "investigation",
-            "OAuth and personal access tokens with permissions, issuing session and consent record.",
-            get_tokens,
-            {"user_id": "string"},
-        ),
-        ToolSpec(
-            "get_cloud_activity",
-            "investigation",
-            "Audited SaaS and cloud control-plane actions. Optionally filter by actor.",
-            get_cloud_activity,
-            {"user_id": "string"},
-        ),
-        ToolSpec(
-            "get_network_activity",
-            "investigation",
-            "Edge flow records including allowed and denied connections. Optionally filter by asset.",
-            get_network_activity,
-            {"asset_id": "string"},
-        ),
-        ToolSpec(
-            "get_asset_status",
-            "investigation",
-            "Detail for one asset: criticality, status, open alerts and event counts.",
-            get_asset_status,
-            {"asset_id": "string"},
-            ("asset_id",),
-        ),
-        ToolSpec(
-            "verify_environment",
-            "verification",
-            "Re-derive containment state: contained flag, risk score and remaining threats.",
-            verify_environment,
-            {},
-        ),
-        ToolSpec(
-            "revoke_token",
-            "defensive",
-            "Revoke an OAuth or access token so it can no longer be used.",
-            revoke_token,
-            {"token_id": "string"},
-            ("token_id",),
-        ),
-        ToolSpec(
-            "terminate_session",
-            "defensive",
-            "Terminate one active session.",
-            terminate_session,
-            {"session_id": "string"},
-            ("session_id",),
-        ),
-        ToolSpec(
-            "block_ip",
-            "defensive",
-            "Block a source IP address at the network edge.",
-            block_ip,
-            {"ip_address": "string"},
-            ("ip_address",),
-        ),
-        ToolSpec(
-            "disable_user",
-            "defensive",
-            "Disable a user account. Disruptive: the person loses all access.",
-            disable_user,
-            {"user_id": "string"},
-            ("user_id",),
-        ),
-        ToolSpec(
-            "restrict_asset",
-            "defensive",
-            "Place an asset under restricted access. Highly disruptive for production assets.",
-            restrict_asset,
-            {"asset_id": "string"},
-            ("asset_id",),
-        ),
-    )
-}
+def _kind(name: str, read_only: bool) -> Kind:
+    if name == "verify_environment":
+        return "verification"
+    return "investigation" if read_only else "defensive"
+
+
+def _signature(fn: Callable[..., Any]) -> Tuple[Dict[str, str], Tuple[str, ...]]:
+    """Read declared arguments straight off the tool, skipping `env`."""
+    params: Dict[str, str] = {}
+    required: List[str] = []
+    for index, (arg, param) in enumerate(inspect.signature(fn).parameters.items()):
+        if index == 0:  # the environment is supplied by the controller
+            continue
+        annotation = str(param.annotation)
+        params[arg] = "integer" if "int" in annotation and "str" not in annotation else "string"
+        if param.default is inspect.Parameter.empty:
+            required.append(arg)
+    return params, tuple(required)
+
+
+def _build_registry() -> Dict[str, ToolSpec]:
+    specs: Dict[str, ToolSpec] = {}
+    for name, entry in BLUE_TOOL_REGISTRY.items():
+        params, required = _signature(entry["fn"])
+        impact = entry["impact"]
+        description = entry["description"]
+        if "since" in params:
+            description = (
+                f"{description} `since` is a simulation-clock time on the current "
+                "simulated day, as HH:MM:SS taken from the range clock — never a "
+                "real-world or invented date. Omit it for everything so far."
+            )
+        if not entry["read_only"]:
+            description = f"{description} Disruption impact: {impact}."
+        specs[name] = ToolSpec(
+            name=name,
+            kind=_kind(name, entry["read_only"]),
+            description=description,
+            fn=entry["fn"],
+            params=params,
+            required=required,
+            impact=impact,
+        )
+    return specs
+
+
+REGISTRY: Dict[str, ToolSpec] = _build_registry()
 
 
 def function_declarations() -> List[Any]:
@@ -165,6 +104,26 @@ def function_declarations() -> List[Any]:
     return declarations
 
 
+def _validate_since(env: CyberEnvironment, value: Any) -> str:
+    """Keep `since` on the simulation clock. Returns an error detail, or ""."""
+    clock = env.state.clock
+    day, offset = clock.current_time[:10], clock.current_time[19:]
+    text = str(value).strip()
+    stamp = f"{day}T{text}{offset}" if len(text) == 8 and text.count(":") == 2 else text
+    window = f"between {clock.start_time[11:19]} and {clock.current_time[11:19]} on {day}"
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError:
+        return f"since must be a simulation time as HH:MM:SS, {window}; got {text!r}"
+    if not (
+        datetime.fromisoformat(clock.start_time)
+        <= moment
+        <= datetime.fromisoformat(clock.current_time)
+    ):
+        return f"since is outside the simulated range; use a time {window}, or omit it"
+    return ""
+
+
 def call_tool(env: CyberEnvironment, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """Validate then execute an allowlisted tool. Never raises."""
     spec = REGISTRY.get(name)
@@ -186,6 +145,11 @@ def call_tool(env: CyberEnvironment, name: str, args: Dict[str, Any]) -> Dict[st
             "error": "INVALID_ARGUMENTS",
             "detail": f"missing required argument(s): {', '.join(missing)}",
         }
+
+    if args.get("since") not in (None, ""):
+        detail = _validate_since(env, args["since"])
+        if detail:
+            return {"success": False, "error": "INVALID_SIMULATION_TIME", "detail": detail}
 
     clean: Dict[str, Any] = {}
     for arg, value in args.items():
