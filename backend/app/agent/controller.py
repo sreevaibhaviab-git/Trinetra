@@ -9,6 +9,7 @@ about a failure are decided entirely by the model.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -30,7 +31,19 @@ REQUEST_TIMEOUT_MS = 60_000
 # Simulated seconds the world moves on between agent iterations. The Red Engine
 # rides the same clock, so the incident keeps developing while Trinetra works.
 TICK_SECONDS = 25
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+RETRY_DELAY_SECONDS = 2.0
+# Transient conditions worth another attempt; anything else (bad key, bad
+# request, permission, schema) is a real error and must surface immediately.
+RETRYABLE_MARKERS = (
+    "429", "500", "502", "503", "504", "timeout", "timed out", "deadline",
+    "unavailable", "resource_exhausted", "internal error", "overloaded",
+)
+FATAL_MARKERS = (
+    "400", "401", "403", "404", "unauthenticated", "permission", "invalid api key",
+    "api key not valid", "invalid_argument", "not found",
+)
 
 EventSink = Callable[[AgentEvent], None]
 
@@ -81,6 +94,9 @@ class TrinetraAgent:
         self.env = env
         _load_env()
         self.model = model or os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+        self.fallback_model = (
+            os.environ.get("GEMINI_FALLBACK_MODEL", "").strip() or DEFAULT_FALLBACK_MODEL
+        )
         self.max_steps = max_steps
         self.on_event = on_event
 
@@ -102,6 +118,42 @@ class TrinetraAgent:
         state.events.append(event)
         if self.on_event:
             self.on_event(event)
+
+    # ── verification bookkeeping ─────────────────────────────────
+    def _record_verification(
+        self, state: AgentState, payload: Dict[str, Any], tool: str, adapted_after: int
+    ) -> Any:
+        """Log a verification result and, if containment fell short, mark an ADAPT.
+
+        The adaptation is recognised from observable verification output only.
+        What to do next is left entirely to the model.
+        """
+        state.latest_verification = payload
+        self._emit(
+            state,
+            Phase.RESULT,
+            f"contained={payload['contained']} risk_score={payload['risk_score']} "
+            f"remaining_threats={len(payload['remaining_threats'])}",
+            tool=tool,
+            success=True,
+        )
+        if payload["contained"] or len(state.actions_taken) <= adapted_after:
+            return adapted_after, ""
+        remaining = ", ".join(
+            f"{t['type']}:{t['target']}" for t in payload["remaining_threats"][:3]
+        ) or "no single target isolated"
+        summary = (
+            "The previous containment action was insufficient: verification reports "
+            f"{len(payload['remaining_threats'])} remaining active threat(s) at risk "
+            f"{payload['risk_score']} ({remaining})."
+        )
+        state.adaptations.append(summary)
+        self._emit(state, Phase.ADAPT, summary + " Reassessing strategy.", tool=tool)
+        return len(state.actions_taken), (
+            "The previous containment action was insufficient. Verification shows "
+            "remaining active threats. Reassess using current observable evidence "
+            "and choose your next step."
+        )
 
     # ── world clock and safety governor ──────────────────────────
     def _halted(self) -> bool:
@@ -133,19 +185,41 @@ class TrinetraAgent:
             http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
         )
 
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        text = str(exc).lower()
+        if any(marker in text for marker in FATAL_MARKERS):
+            return False
+        return any(marker in text for marker in RETRYABLE_MARKERS)
+
     def _generate(self, contents: List[Any]) -> Any:
-        """One model request, retried at most once. A hung call cannot block forever."""
-        last: Exception
-        for attempt in range(MODEL_RETRIES + 1):
-            print("Waiting for Gemini decision...", flush=True)
-            try:
-                return self.client.models.generate_content(
-                    model=self.model, contents=contents, config=self._config()
-                )
-            except Exception as exc:  # timeout, transport error, transient 5xx
-                last = exc
-                if attempt >= MODEL_RETRIES:
-                    break
+        """One model request: primary, one retry, then one fallback attempt.
+
+        The same `contents` are reused throughout, so a model switch keeps the
+        whole investigation — no turn is replayed and nothing restarts.
+        """
+        last: Exception = RuntimeError("no model attempt was made")
+        candidates = [(self.model, MODEL_RETRIES)]
+        if self.fallback_model and self.fallback_model != self.model:
+            candidates.append((self.fallback_model, 0))
+        for index, (model, retries) in enumerate(candidates):
+            if index:
+                print(f"Switching to fallback model: {model}", flush=True)
+            for attempt in range(retries + 1):
+                print("Waiting for Gemini decision...", flush=True)
+                try:
+                    response = self.client.models.generate_content(
+                        model=model, contents=contents, config=self._config()
+                    )
+                    self.model = model  # stay on whichever model answered
+                    return response
+                except Exception as exc:
+                    last = exc
+                    if not self._is_retryable(exc):
+                        raise
+                    if attempt < retries:
+                        print("Primary model unavailable — retrying...", flush=True)
+                        time.sleep(RETRY_DELAY_SECONDS)
         raise last
 
     def run(self, goal: str) -> AgentState:
@@ -170,6 +244,7 @@ class TrinetraAgent:
         api_failures = 0
         pending_adaptation = False
         verified_since_action = True
+        adapted_after_actions = 0
 
         while state.step < self.max_steps:
             state.step += 1
@@ -241,12 +316,34 @@ class TrinetraAgent:
 
             # ── execute the requested tools ──────────────────────
             response_parts = []
+            adapt_note = ""
+            acted_this_cycle = False
+            world_advanced = False
             for call in calls:
                 name = call.name or ""
                 args: Dict[str, Any] = dict(call.args or {})
                 spec = REGISTRY.get(name)
                 kind = spec.kind if spec else "unknown"
                 target = target_of(name, args)
+
+                if kind == "defensive" and acted_this_cycle:
+                    # One state-changing action per decision cycle: the model sees
+                    # what the first one did before choosing another.
+                    response_parts.append(
+                        types.Part.from_function_response(
+                            name=name,
+                            response={
+                                "success": False,
+                                "error": "ONE_ACTION_PER_CYCLE",
+                                "detail": (
+                                    "a defensive action was already applied this turn and "
+                                    "verified; review the verification, then act again if "
+                                    "the evidence still supports it"
+                                ),
+                            },
+                        )
+                    )
+                    continue
 
                 if kind == "defensive":
                     state.status = AgentStatus.CONTAINING
@@ -295,6 +392,37 @@ class TrinetraAgent:
                             target=target or None,
                             success=True,
                         )
+                        # Let the world move, then verify straight away so the next
+                        # decision is made against the estate as it now stands.
+                        acted_this_cycle = True
+                        self._advance_world(state)
+                        world_advanced = True
+                        state.status = AgentStatus.VERIFYING
+                        self._emit(
+                            state,
+                            Phase.EVALUATE,
+                            "Verifying the effect of that action.",
+                            tool="verify_environment",
+                        )
+                        check = call_tool(self.env, "verify_environment", {})
+                        state.tools_called.append("verify_environment")
+                        if check.get("success"):
+                            verified_since_action = True
+                            adapted_after_actions, note = self._record_verification(
+                                state, check["result"], "verify_environment", adapted_after_actions
+                            )
+                            adapt_note = note or adapt_note
+                        response_parts.append(
+                            types.Part.from_function_response(
+                                name=name, response=outcome
+                            )
+                        )
+                        response_parts.append(
+                            types.Part.from_function_response(
+                                name="verify_environment", response=check
+                            )
+                        )
+                        continue
                     else:
                         error = (
                             payload.get("error")
@@ -313,16 +441,11 @@ class TrinetraAgent:
                             success=False,
                         )
                 elif kind == "verification" and ok:
-                    state.latest_verification = payload
                     verified_since_action = True
-                    self._emit(
-                        state,
-                        Phase.RESULT,
-                        f"contained={payload['contained']} risk_score={payload['risk_score']} "
-                        f"remaining_threats={len(payload['remaining_threats'])}",
-                        tool=name,
-                        success=True,
+                    adapted_after_actions, note = self._record_verification(
+                        state, payload, name, adapted_after_actions
                     )
+                    adapt_note = note or adapt_note
                 else:
                     if ok:
                         count = len(payload) if isinstance(payload, list) else 1
@@ -359,7 +482,10 @@ class TrinetraAgent:
                     )
                 )
 
-            self._advance_world(state)
+            if not world_advanced:
+                self._advance_world(state)
+            if adapt_note:
+                response_parts.append(types.Part(text=adapt_note))
             response_parts.append(
                 types.Part(text=f"SIMULATION CLOCK is now {self.env.get_current_time()}.")
             )
