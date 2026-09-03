@@ -18,30 +18,52 @@ from typing import Callable, Dict, List, Tuple
 
 from app.models.environment import (
     AlertStatus,
+    Application,
     Asset,
     AssetCriticality,
     AssetType,
     AuthenticationEvent,
     BlockedIP,
+    BrowserSession,
     CloudEvent,
+    DnsEvent,
+    Download,
+    DriveEvent,
+    Endpoint,
+    EndpointConnection,
     EnvironmentState,
     EnvironmentStatus,
     EventOutcome,
     GeoLocation,
+    HiddenState,
     IncidentStatus,
+    MailboxEvent,
+    MailboxRule,
     NetworkEvent,
+    OAuthGrant,
     Organization,
+    OutboundTransferEvent,
+    PersistenceEntry,
+    Process,
+    RegisteredDevice,
+    SafetyState,
+    ScheduledEvent,
     SecurityAlert,
     Session,
     SessionStatus,
     Severity,
+    SimulationClock,
+    SimulationStatus,
+    SyntheticFile,
+    TelemetryEvent,
+    TelemetrySource,
     Token,
     TokenStatus,
     User,
     UserAccessLevel,
 )
 
-DEFAULT_SCENARIO = "credential_compromise"
+DEFAULT_SCENARIO = "nexora_baseline"
 
 # The whole simulation happens on one fixed day, expressed in the SOC's
 # reference timezone (IST, UTC+05:30).
@@ -903,10 +925,709 @@ def build_credential_compromise() -> EnvironmentState:
         security_alerts=alerts,
         blocked_ips=_build_blocked_ips(),
         incident_status=_build_incident_status(alerts),
+        clock=SimulationClock(start_time=_ts("17:39:00"), current_time=_ts("17:39:00")),
+        safety=SafetyState(simulation_status=SimulationStatus.READY, resilience_score=100),
+    )
+
+
+# ---------------------------------------------------------------------------
+# nexora_baseline — the clean digital twin. Healthy posture, no alerts, no
+# incident. Everything below is invented data describing a quiet working
+# morning; nothing is read from a real machine, mailbox, account or network.
+# ---------------------------------------------------------------------------
+
+BASELINE_START = "09:00:00"
+
+ENDPOINT_ARJUN = "endpoint-arjun-01"
+ENDPOINT_MAYA = "endpoint-maya-01"
+ENDPOINT_ETHAN = "endpoint-ethan-01"
+
+
+def _baseline_users() -> Dict[str, User]:
+    """The same three accounts, enrolled on the three baseline endpoints."""
+    users = _build_users()
+    users["arjun.rao"].known_devices = [ENDPOINT_ARJUN]
+    users["maya.shah"].known_devices = [ENDPOINT_MAYA]
+    users["ethan.lee"].known_devices = [ENDPOINT_ETHAN]
+    return users
+
+
+def _baseline_assets() -> Dict[str, Asset]:
+    """The estate at rest: nothing restricted, exposure limited to the edge."""
+    assets = _build_assets()
+    for asset in assets.values():
+        asset.exposed = asset.internet_facing
+        asset.restricted = False
+    assets["github"].recent_activity = ["repo.pull nexora/payments-api (ethan.lee)"]
+    assets["aws"].recent_activity = ["ec2:DescribeInstances (arjun.rao)"]
+    assets["api-gateway"].recent_activity = ["4.2k requests, 0 blocked"]
+    assets["production-server"].recent_activity = ["deploy 2026-03-10 21:14 (ci-runner)"]
+    assets["customer-database"].recent_activity = ["nightly backup completed 03:00"]
+    assets["identity-provider"].recent_activity = ["3 sign-ins, all MFA satisfied"]
+    return assets
+
+
+def _baseline_devices() -> Dict[str, RegisteredDevice]:
+    return {
+        ENDPOINT_ARJUN: RegisteredDevice(
+            device_id=ENDPOINT_ARJUN,
+            owner="arjun.rao",
+            platform="macOS 14.4",
+            enrolled_at="2023-04-18",
+            managed=True,
+            compliant=True,
+            endpoint_id=ENDPOINT_ARJUN,
+        ),
+        ENDPOINT_MAYA: RegisteredDevice(
+            device_id=ENDPOINT_MAYA,
+            owner="maya.shah",
+            platform="Windows 11",
+            enrolled_at="2024-02-06",
+            managed=True,
+            compliant=True,
+            endpoint_id=ENDPOINT_MAYA,
+        ),
+        ENDPOINT_ETHAN: RegisteredDevice(
+            device_id=ENDPOINT_ETHAN,
+            owner="ethan.lee",
+            platform="Ubuntu 24.04",
+            enrolled_at="2024-09-24",
+            managed=True,
+            compliant=True,
+            endpoint_id=ENDPOINT_ETHAN,
+        ),
+    }
+
+
+def _baseline_sessions() -> Dict[str, Session]:
+    return {
+        "sess-2001": Session(
+            session_id="sess-2001",
+            user_id="arjun.rao",
+            started_at=_ts("08:41:12"),
+            last_activity_at=_ts(BASELINE_START),
+            source_ip=IP_ARJUN_BANGALORE,
+            geo=BANGALORE,
+            asn="AS24560 Bharti Airtel Ltd.",
+            isp="Bharti Airtel",
+            network_type="corporate_broadband",
+            device_id=ENDPOINT_ARJUN,
+            device_managed=True,
+            user_agent=UA_MAC_CHROME,
+            client_platform="macOS 14.4",
+            mfa_satisfied=True,
+            auth_method="password+webauthn",
+            status=SessionStatus.ACTIVE,
+            assets_touched=["identity-provider", "github"],
+        ),
+        "sess-2002": Session(
+            session_id="sess-2002",
+            user_id="maya.shah",
+            started_at=_ts("08:52:30"),
+            last_activity_at=_ts(BASELINE_START),
+            source_ip=IP_MAYA_BANGALORE,
+            geo=BANGALORE,
+            asn="AS24560 Bharti Airtel Ltd.",
+            isp="Bharti Airtel",
+            network_type="corporate_broadband",
+            device_id=ENDPOINT_MAYA,
+            device_managed=True,
+            user_agent=UA_WIN_EDGE,
+            client_platform="Windows 11",
+            mfa_satisfied=True,
+            auth_method="password+webauthn",
+            status=SessionStatus.ACTIVE,
+            assets_touched=["identity-provider"],
+        ),
+        "sess-2003": Session(
+            session_id="sess-2003",
+            user_id="ethan.lee",
+            started_at=_ts("08:58:04"),
+            last_activity_at=_ts(BASELINE_START),
+            source_ip=IP_ETHAN_SINGAPORE,
+            geo=SINGAPORE,
+            asn="AS3758 SingNet Pte Ltd",
+            isp="SingNet",
+            network_type="corporate_broadband",
+            device_id=ENDPOINT_ETHAN,
+            device_managed=True,
+            user_agent=UA_LINUX_CHROME,
+            client_platform="Linux x86_64",
+            mfa_satisfied=True,
+            auth_method="password+totp",
+            status=SessionStatus.ACTIVE,
+            assets_touched=["identity-provider", "github"],
+        ),
+    }
+
+
+def _baseline_tokens() -> Dict[str, Token]:
+    return {
+        "oauth-7710": Token(
+            token_id="oauth-7710",
+            owner="arjun.rao",
+            token_type="oauth_access_token",
+            issued_at="2026-02-27T10:41:08+05:30",
+            expires_at="2026-05-28T10:41:08+05:30",
+            issued_via_session="sess-0912",
+            issued_from_ip=IP_ARJUN_BANGALORE,
+            permissions=["github.read"],
+            status=TokenStatus.ACTIVE,
+            consent_prompt_shown=True,
+            client_name="nexora-ci-bot",
+            client_registered_at="2024-06-11T12:00:00+05:30",
+            last_used_at=_ts("08:44:02"),
+        ),
+        "pat-3312": Token(
+            token_id="pat-3312",
+            owner="maya.shah",
+            token_type="personal_access_token",
+            issued_at="2026-01-19T09:33:51+05:30",
+            expires_at="2026-07-18T09:33:51+05:30",
+            issued_via_session="sess-0641",
+            issued_from_ip=IP_MAYA_BANGALORE,
+            permissions=["github.read", "siem.read"],
+            status=TokenStatus.ACTIVE,
+            consent_prompt_shown=True,
+            client_name="nexora-soc-tooling",
+            client_registered_at="2024-03-02T12:00:00+05:30",
+            last_used_at=_ts("08:55:11"),
+        ),
+        "oauth-6321": Token(
+            token_id="oauth-6321",
+            owner="ethan.lee",
+            token_type="oauth_access_token",
+            issued_at="2026-02-02T11:15:36+05:30",
+            expires_at="2026-05-03T11:15:36+05:30",
+            issued_via_session="sess-0788",
+            issued_from_ip=IP_ETHAN_SINGAPORE,
+            permissions=["github.read"],
+            status=TokenStatus.ACTIVE,
+            consent_prompt_shown=True,
+            client_name="nexora-ci-bot",
+            client_registered_at="2024-06-11T12:00:00+05:30",
+            last_used_at=_ts("08:59:40"),
+        ),
+    }
+
+
+def _baseline_oauth_grants() -> Dict[str, OAuthGrant]:
+    return {
+        "grant-1101": OAuthGrant(
+            grant_id="grant-1101",
+            user_id="arjun.rao",
+            client_name="nexora-ci-bot",
+            scopes=["github.read"],
+            granted_at="2026-02-27T10:41:08+05:30",
+            first_party=True,
+        ),
+        "grant-1102": OAuthGrant(
+            grant_id="grant-1102",
+            user_id="maya.shah",
+            client_name="nexora-soc-tooling",
+            scopes=["github.read", "siem.read"],
+            granted_at="2026-01-19T09:33:51+05:30",
+            first_party=True,
+        ),
+        "grant-1103": OAuthGrant(
+            grant_id="grant-1103",
+            user_id="ethan.lee",
+            client_name="nexora-ci-bot",
+            scopes=["github.read"],
+            granted_at="2026-02-02T11:15:36+05:30",
+            first_party=True,
+        ),
+    }
+
+
+def _baseline_auth_events() -> List[AuthenticationEvent]:
+    logins = [
+        ("auth-1001", "08:41:12", "arjun.rao", IP_ARJUN_BANGALORE, BANGALORE,
+         "AS24560 Bharti Airtel Ltd.", ENDPOINT_ARJUN, UA_MAC_CHROME,
+         "password+webauthn", "sess-2001", 3),
+        ("auth-1002", "08:52:30", "maya.shah", IP_MAYA_BANGALORE, BANGALORE,
+         "AS24560 Bharti Airtel Ltd.", ENDPOINT_MAYA, UA_WIN_EDGE,
+         "password+webauthn", "sess-2002", 2),
+        ("auth-1003", "08:58:04", "ethan.lee", IP_ETHAN_SINGAPORE, SINGAPORE,
+         "AS3758 SingNet Pte Ltd", ENDPOINT_ETHAN, UA_LINUX_CHROME,
+         "password+totp", "sess-2003", 5),
+    ]
+    return [
+        AuthenticationEvent(
+            event_id=event_id,
+            timestamp=_ts(clock),
+            user_id=user_id,
+            event_type="user_login",
+            outcome=EventOutcome.SUCCESS,
+            source_ip=ip,
+            geo=geo,
+            asn=asn,
+            device_id=device,
+            user_agent=agent,
+            auth_method=method,
+            mfa_satisfied=True,
+            session_id=session,
+            details={"device_registered": True, "risk_score": risk},
+        )
+        for event_id, clock, user_id, ip, geo, asn, device, agent, method, session, risk in logins
+    ]
+
+
+def _baseline_cloud_events() -> List[CloudEvent]:
+    return [
+        CloudEvent(
+            event_id="cloud-1001",
+            timestamp=_ts("08:44:02"),
+            actor="arjun.rao",
+            asset_id="aws",
+            service="ec2",
+            action="ec2:DescribeInstances",
+            resource="arn:aws:ec2:ap-south-1:418322947610:instance/*",
+            outcome=EventOutcome.SUCCESS,
+            source_ip=IP_ARJUN_BANGALORE,
+            token_id="oauth-7710",
+            user_agent="aws-cli/2.15.30",
+            details={"read_only": True, "instances_returned": 34},
+        ),
+        CloudEvent(
+            event_id="cloud-1002",
+            timestamp=_ts("08:59:40"),
+            actor="ethan.lee",
+            asset_id="github",
+            service="github",
+            action="repo.pull",
+            resource="nexora/payments-api",
+            outcome=EventOutcome.SUCCESS,
+            source_ip=IP_ETHAN_SINGAPORE,
+            session_id="sess-2003",
+            token_id="oauth-6321",
+            user_agent="git/2.44.0",
+            details={"repository_count": 1, "bytes_transferred": 6_112_384},
+        ),
+    ]
+
+
+def _baseline_network_events() -> List[NetworkEvent]:
+    return [
+        NetworkEvent(
+            event_id="net-1001",
+            timestamp=_ts("08:41:20"),
+            source_ip=IP_ARJUN_BANGALORE,
+            source_geo=BANGALORE,
+            destination_asset="identity-provider",
+            destination_port=443,
+            protocol="tcp",
+            action="allowed",
+            bytes_in=38_204,
+            bytes_out=11_880,
+            duration_seconds=96,
+            tls_fingerprint=JA3_CORPORATE_MAC,
+            details={"rule": "edge-allow-idp"},
+        ),
+        NetworkEvent(
+            event_id="net-1002",
+            timestamp=_ts("08:58:12"),
+            source_ip=IP_ETHAN_SINGAPORE,
+            source_geo=SINGAPORE,
+            destination_asset="api-gateway",
+            destination_port=443,
+            protocol="tcp",
+            action="allowed",
+            bytes_in=142_880,
+            bytes_out=48_120,
+            duration_seconds=1_204,
+            tls_fingerprint=JA3_CORPORATE_WIN,
+            details={"rule": "edge-allow-corp-vpn"},
+        ),
+    ]
+
+
+def _arjun_endpoint() -> Endpoint:
+    """Arjun's laptop, mid-morning: a browser, an editor, a shell and chat."""
+    return Endpoint(
+        endpoint_id=ENDPOINT_ARJUN,
+        hostname="nx-mac-arjun",
+        owner="arjun.rao",
+        os="macOS",
+        os_version="14.4",
+        last_seen=_ts(BASELINE_START),
+        processes=[
+            Process(501, "browser", "/Applications/Chrome.app --profile work", "arjun.rao",
+                    _ts("08:41:44"), True, parent_pid=1),
+            Process(612, "vscode", "/Applications/VSCode.app --folder infra-terraform",
+                    "arjun.rao", _ts("08:43:02"), True, parent_pid=1),
+            Process(704, "terminal", "/bin/zsh -l", "arjun.rao", _ts("08:43:55"), True,
+                    parent_pid=1),
+            Process(755, "slack", "/Applications/Slack.app", "arjun.rao", _ts("08:44:18"),
+                    True, parent_pid=1),
+        ],
+        files=[
+            SyntheticFile("/Users/arjun/Documents/project-plan.pdf", "project-plan.pdf",
+                          "pdf", 842_112, "internal", _ts("08:12:40", "2026-03-09")),
+            SyntheticFile("/Users/arjun/Documents/vendor-invoice.pdf", "vendor-invoice.pdf",
+                          "pdf", 214_880, "confidential", _ts("16:22:07", "2026-03-10")),
+            SyntheticFile("/Users/arjun/Documents/finance-budget.xlsx", "finance-budget.xlsx",
+                          "xlsx", 1_284_096, "confidential", _ts("11:04:19", "2026-03-10")),
+            SyntheticFile("/Users/arjun/work/infra-terraform/config.example", "config.example",
+                          "config", 4_312, "internal", _ts("08:43:10")),
+        ],
+        applications=[
+            Application("Chrome", "133.0.6943.98", "Google LLC", "2025-11-02", True),
+            Application("Visual Studio Code", "1.97.2", "Microsoft", "2025-11-02", True),
+            Application("Slack", "4.42.115", "Slack Technologies", "2025-11-02", True),
+            Application("AWS CLI", "2.15.30", "Amazon Web Services", "2026-01-14", True),
+        ],
+        browser_sessions=[
+            BrowserSession("bsess-3001", "Chrome", "work", "github.com", _ts("08:42:01")),
+            BrowserSession("bsess-3002", "Chrome", "work", "console.aws.amazon.com",
+                           _ts("08:43:47")),
+        ],
+        network_connections=[
+            EndpointConnection("econn-4001", "browser", "tcp", "140.82.121.4", 443,
+                               "outbound", "established", 182_400, 61_240, _ts("08:42:01")),
+            EndpointConnection("econn-4002", "slack", "tcp", "99.86.4.120", 443, "outbound",
+                               "established", 44_180, 12_004, _ts("08:44:20")),
+        ],
+        persistence_entries=[
+            PersistenceEntry("persist-5001", "launch_agent", "com.nexora.mdm.agent",
+                             "/Library/Nexora/mdm-agent", "2023-04-18"),
+            PersistenceEntry("persist-5002", "launch_agent", "com.slack.helper",
+                             "/Applications/Slack.app/Contents/MacOS/helper", "2025-11-02"),
+        ],
+        downloads=[
+            Download("dl-6001", "vendor-invoice.pdf", "billing.nexorasystems.io",
+                     _ts("16:21:58", "2026-03-10"), 214_880,
+                     "/Users/arjun/Downloads/vendor-invoice.pdf"),
+        ],
+    )
+
+
+def _maya_endpoint() -> Endpoint:
+    return Endpoint(
+        endpoint_id=ENDPOINT_MAYA,
+        hostname="nx-win-maya",
+        owner="maya.shah",
+        os="Windows",
+        os_version="11 23H2",
+        last_seen=_ts(BASELINE_START),
+        processes=[
+            Process(2104, "browser", "msedge.exe --profile work", "maya.shah",
+                    _ts("08:52:44"), True, parent_pid=1),
+            Process(2288, "siem-console", "siem-console.exe --workspace nexora-soc",
+                    "maya.shah", _ts("08:53:12"), True, parent_pid=1),
+            Process(2350, "slack", "slack.exe", "maya.shah", _ts("08:53:40"), True,
+                    parent_pid=1),
+        ],
+        files=[
+            SyntheticFile("C:/Users/maya/Documents/soc-runbook.docx", "soc-runbook.docx",
+                          "docx", 512_400, "internal", _ts("18:02:11", "2026-03-06")),
+            SyntheticFile("C:/Users/maya/Documents/detection-rules.yaml",
+                          "detection-rules.yaml", "yaml", 38_912, "internal",
+                          _ts("17:40:22", "2026-03-10")),
+        ],
+        applications=[
+            Application("Microsoft Edge", "133.0.3065.59", "Microsoft", "2025-08-19", True),
+            Application("SIEM Console", "7.4.1", "Nexora Security", "2025-08-19", True),
+            Application("Slack", "4.42.115", "Slack Technologies", "2025-08-19", True),
+        ],
+        browser_sessions=[
+            BrowserSession("bsess-3010", "Edge", "work", "siem.nexorasystems.io",
+                           _ts("08:53:02")),
+        ],
+        network_connections=[
+            EndpointConnection("econn-4010", "siem-console", "tcp", "10.24.7.18", 8443,
+                               "outbound", "established", 812_400, 96_120, _ts("08:53:14")),
+        ],
+        persistence_entries=[
+            PersistenceEntry("persist-5010", "scheduled_task", "NexoraMDMSync",
+                             "C:/Program Files/Nexora/mdm-sync.exe", "2024-02-06"),
+        ],
+        downloads=[],
+    )
+
+
+def _ethan_endpoint() -> Endpoint:
+    return Endpoint(
+        endpoint_id=ENDPOINT_ETHAN,
+        hostname="nx-lnx-ethan",
+        owner="ethan.lee",
+        os="Linux",
+        os_version="Ubuntu 24.04 LTS",
+        last_seen=_ts(BASELINE_START),
+        processes=[
+            Process(3011, "browser", "/usr/bin/google-chrome --profile-directory=Work",
+                    "ethan.lee", _ts("08:58:20"), True, parent_pid=1),
+            Process(3120, "terminal", "/usr/bin/bash -l", "ethan.lee", _ts("08:58:44"),
+                    True, parent_pid=1),
+            Process(3188, "docker", "dockerd --containerd=/run/containerd.sock", "root",
+                    _ts("08:30:02"), True, parent_pid=1),
+        ],
+        files=[
+            SyntheticFile("/home/ethan/src/payments-api/README.md", "README.md", "markdown",
+                          12_804, "internal", _ts("09:14:52", "2026-03-10")),
+            SyntheticFile("/home/ethan/src/payments-api/docker-compose.yml",
+                          "docker-compose.yml", "yaml", 3_218, "internal",
+                          _ts("15:02:31", "2026-03-10")),
+        ],
+        applications=[
+            Application("Google Chrome", "121.0.6167.85", "Google LLC", "2025-06-30", True),
+            Application("Docker Engine", "26.1.3", "Docker Inc.", "2025-06-30", True),
+            Application("Git", "2.44.0", "Software Freedom Conservancy", "2025-06-30", True),
+        ],
+        browser_sessions=[
+            BrowserSession("bsess-3020", "Chrome", "Work", "github.com", _ts("08:58:26")),
+        ],
+        network_connections=[
+            EndpointConnection("econn-4020", "browser", "tcp", "140.82.121.4", 443,
+                               "outbound", "established", 96_512, 30_104, _ts("08:58:26")),
+        ],
+        persistence_entries=[
+            PersistenceEntry("persist-5020", "systemd_unit", "nexora-mdm.service",
+                             "/usr/lib/nexora/mdm-agent", "2024-09-24"),
+        ],
+        downloads=[],
+    )
+
+
+def _baseline_endpoints() -> Dict[str, Endpoint]:
+    return {
+        ENDPOINT_ARJUN: _arjun_endpoint(),
+        ENDPOINT_MAYA: _maya_endpoint(),
+        ENDPOINT_ETHAN: _ethan_endpoint(),
+    }
+
+
+def _baseline_mailbox_events() -> List[MailboxEvent]:
+    return [
+        MailboxEvent(
+            event_id="mail-1001",
+            timestamp=_ts("08:47:12"),
+            mailbox="arjun.rao@nexorasystems.io",
+            event_type="message_received",
+            subject="Vendor invoice — March",
+            sender="billing@nexorasystems.io",
+            recipient="arjun.rao@nexorasystems.io",
+            outcome=EventOutcome.SUCCESS,
+            details={"attachments": 1, "spf": "pass", "dkim": "pass", "dmarc": "pass"},
+        ),
+        MailboxEvent(
+            event_id="mail-1002",
+            timestamp=_ts("08:56:04"),
+            mailbox="maya.shah@nexorasystems.io",
+            event_type="message_read",
+            subject="Weekly detection tuning digest",
+            sender="soc-reports@nexorasystems.io",
+            recipient="maya.shah@nexorasystems.io",
+            outcome=EventOutcome.SUCCESS,
+            details={"attachments": 0},
+        ),
+    ]
+
+
+def _baseline_mailbox_rules() -> List[MailboxRule]:
+    return [
+        MailboxRule(
+            rule_id="rule-1001",
+            mailbox="maya.shah@nexorasystems.io",
+            name="File SOC digests",
+            created_at="2024-03-11",
+            created_by="maya.shah",
+            conditions={"from": "soc-reports@nexorasystems.io"},
+            actions=["move_to:Reports"],
+        ),
+    ]
+
+
+def _baseline_drive_events() -> List[DriveEvent]:
+    return [
+        DriveEvent(
+            event_id="drive-1001",
+            timestamp=_ts("08:49:31"),
+            actor="arjun.rao",
+            file_id="file-9001",
+            file_name="finance-budget.xlsx",
+            action="preview",
+            sensitivity="confidential",
+            source_ip=IP_ARJUN_BANGALORE,
+            details={"shared_externally": False},
+        ),
+        DriveEvent(
+            event_id="drive-1002",
+            timestamp=_ts("08:57:18"),
+            actor="ethan.lee",
+            file_id="file-9002",
+            file_name="payments-api-design.md",
+            action="download",
+            sensitivity="internal",
+            source_ip=IP_ETHAN_SINGAPORE,
+            details={"shared_externally": False, "bytes": 48_120},
+        ),
+    ]
+
+
+def _baseline_dns_events() -> List[DnsEvent]:
+    return [
+        DnsEvent("dns-1001", _ts("08:42:00"), ENDPOINT_ARJUN, "github.com", "A",
+                 "140.82.121.4", "allowed", "development"),
+        DnsEvent("dns-1002", _ts("08:53:00"), ENDPOINT_MAYA, "siem.nexorasystems.io", "A",
+                 "10.24.7.18", "allowed", "corporate"),
+        DnsEvent("dns-1003", _ts("08:58:25"), ENDPOINT_ETHAN, "github.com", "A",
+                 "140.82.121.4", "allowed", "development"),
+    ]
+
+
+def _baseline_outbound_transfers() -> List[OutboundTransferEvent]:
+    return [
+        OutboundTransferEvent("xfer-1001", _ts("08:59:40"), ENDPOINT_ETHAN, "github.com",
+                              "140.82.121.4", "https", 6_112_384, 41, "source_code"),
+        OutboundTransferEvent("xfer-1002", _ts("08:44:02"), ENDPOINT_ARJUN,
+                              "ec2.ap-south-1.amazonaws.com", "52.95.80.10", "https",
+                              88_400, 4, "api_call"),
+    ]
+
+
+def _baseline_telemetry() -> List[TelemetryEvent]:
+    """One normalised event per source, describing a quiet morning."""
+    entries = [
+        ("tel-1001", "08:41:12", TelemetrySource.IDENTITY, "authentication", "user_login",
+         "Sign-in succeeded from a registered device with MFA satisfied.",
+         "arjun.rao", "identity-provider",
+         {"source_ip": IP_ARJUN_BANGALORE, "auth_method": "password+webauthn"}),
+        ("tel-1002", "08:43:55", TelemetrySource.ENDPOINT, "process", "process_started",
+         "Interactive shell started by the logged-in console user.",
+         "arjun.rao", ENDPOINT_ARJUN, {"process": "terminal", "pid": 704, "signed": True}),
+        ("tel-1003", "08:47:12", TelemetrySource.SAAS, "mail", "message_received",
+         "Internal message delivered with SPF, DKIM and DMARC passing.",
+         "arjun.rao", "identity-provider",
+         {"sender": "billing@nexorasystems.io", "attachments": 1}),
+        ("tel-1004", "08:44:02", TelemetrySource.CLOUD, "cloud_api", "read_only_api_call",
+         "Read-only inventory call against the production account.",
+         "arjun.rao", "aws", {"action": "ec2:DescribeInstances", "instances_returned": 34}),
+        ("tel-1005", "08:58:12", TelemetrySource.NETWORK, "flow", "outbound_flow",
+         "Outbound TLS flow to the edge gateway over the corporate path.",
+         "ethan.lee", "api-gateway", {"destination_port": 443, "action": "allowed"}),
+        ("tel-1006", "08:49:31", TelemetrySource.DATA, "drive", "file_preview",
+         "Confidential spreadsheet previewed in the cloud drive by its owner.",
+         "arjun.rao", "customer-database",
+         {"file_name": "finance-budget.xlsx", "shared_externally": False}),
+    ]
+    return [
+        TelemetryEvent(
+            id=event_id,
+            timestamp=_ts(clock),
+            source=source,
+            category=category,
+            event_type=event_type,
+            severity=Severity.INFO,
+            message=message,
+            related_user=user,
+            related_asset=asset,
+            metadata=metadata,
+        )
+        for event_id, clock, source, category, event_type, message, user, asset, metadata in entries
+    ]
+
+
+def _baseline_clock() -> SimulationClock:
+    """A stopped clock at 09:00:00 with a few harmless events on the queue."""
+    return SimulationClock(
+        start_time=_ts(BASELINE_START),
+        current_time=_ts(BASELINE_START),
+        elapsed_seconds=0,
+        scheduled_events=[
+            ScheduledEvent(
+                event_id="sched-0001",
+                name="mdm_heartbeat",
+                category="endpoint",
+                scheduled_at=_ts("09:00:30"),
+                payload={
+                    "source": TelemetrySource.ENDPOINT.value,
+                    "category": "management",
+                    "event_type": "mdm_heartbeat",
+                    "message": "Managed endpoints checked in to the MDM service.",
+                    "related_asset": ENDPOINT_ARJUN,
+                },
+            ),
+            ScheduledEvent(
+                event_id="sched-0002",
+                name="idp_session_refresh",
+                category="identity",
+                scheduled_at=_ts("09:01:00"),
+                payload={
+                    "source": TelemetrySource.IDENTITY.value,
+                    "category": "authentication",
+                    "event_type": "session_refresh",
+                    "message": "Active sessions refreshed their access tokens.",
+                    "related_asset": "identity-provider",
+                },
+            ),
+            ScheduledEvent(
+                event_id="sched-0003",
+                name="edge_flow_summary",
+                category="network",
+                scheduled_at=_ts("09:05:00"),
+                payload={
+                    "source": TelemetrySource.NETWORK.value,
+                    "category": "flow",
+                    "event_type": "flow_summary",
+                    "message": "Five-minute edge flow summary published.",
+                    "related_asset": "api-gateway",
+                },
+            ),
+        ],
+    )
+
+
+def _baseline_incident_status() -> IncidentStatus:
+    return IncidentStatus(
+        incident_id="INC-NONE",
+        status=EnvironmentStatus.HEALTHY,
+        severity=Severity.INFO,
+        declared_at=_ts(BASELINE_START),
+        declared_by="nexora-soc-correlation-engine",
+        open_alert_count=0,
+        highest_alert_severity=Severity.INFO,
+        containment_actions=[],
+        notes=["Baseline posture. No open detections and no containment in effect."],
+    )
+
+
+def build_nexora_baseline() -> EnvironmentState:
+    """Build `nexora_baseline`: the healthy digital twin at 09:00:00."""
+    return EnvironmentState(
+        scenario="nexora_baseline",
+        simulation_time=_ts(BASELINE_START),
+        organization=_build_organization(),
+        users=_baseline_users(),
+        assets=_baseline_assets(),
+        sessions=_baseline_sessions(),
+        tokens=_baseline_tokens(),
+        authentication_events=_baseline_auth_events(),
+        cloud_events=_baseline_cloud_events(),
+        network_events=_baseline_network_events(),
+        security_alerts=[],
+        blocked_ips=[],
+        incident_status=_baseline_incident_status(),
+        endpoints=_baseline_endpoints(),
+        devices=_baseline_devices(),
+        oauth_grants=_baseline_oauth_grants(),
+        mailbox_events=_baseline_mailbox_events(),
+        mailbox_rules=_baseline_mailbox_rules(),
+        drive_events=_baseline_drive_events(),
+        dns_events=_baseline_dns_events(),
+        outbound_transfer_events=_baseline_outbound_transfers(),
+        telemetry=_baseline_telemetry(),
+        clock=_baseline_clock(),
+        safety=SafetyState(simulation_status=SimulationStatus.READY, resilience_score=100),
+        hidden=HiddenState(
+            scenario_truth={"scenario": "nexora_baseline", "compromised": False},
+            red_engine_notes=["Baseline estate. No red activity staged."],
+        ),
     )
 
 
 SCENARIO_BUILDERS: Dict[str, Callable[[], EnvironmentState]] = {
+    "nexora_baseline": build_nexora_baseline,
     "credential_compromise": build_credential_compromise,
 }
 

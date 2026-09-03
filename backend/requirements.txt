@@ -1,7 +1,6 @@
-# TRINETRA backend — Phase 1 (synthetic cyber environment)
+# TRINETRA backend
 #
-# Phase 1 has NO third-party dependencies. Everything here runs on the
-# Python 3 standard library (dataclasses, enum, math, json, typing).
-# Requires Python 3.9 or newer.
-#
-# Install nothing; just run:  python3 run_demo.py
+# Phases 1-2 (environment + tools) are standard library only.
+# Phase 3 (autonomous agent) needs the Gemini SDK:
+google-genai>=1.0
+python-dotenv>=1.0

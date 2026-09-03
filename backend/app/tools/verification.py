@@ -53,11 +53,17 @@ def verify_environment(env: CyberEnvironment) -> Dict[str, Any]:
     hostile_ips: Set[str] = {s.source_ip for s in suspicious_sessions}
     hostile_ips.update(e.source_ip for e in state.network_events if e.action == "denied")
 
-    # 2. Tokens still live that were minted from a hostile source.
+    # 2. Tokens still live that were minted from a hostile source. A token whose
+    #    owner is disabled cannot be exchanged, so it is no longer a live path.
+    def _owner_enabled(owner: str) -> bool:
+        user = state.users.get(owner)
+        return user is None or user.status == "enabled"
+
     compromised_tokens = [
         t
         for t in state.tokens.values()
         if t.status is TokenStatus.ACTIVE
+        and _owner_enabled(t.owner)
         and (t.issued_from_ip in hostile_ips or not t.consent_prompt_shown)
     ]
 

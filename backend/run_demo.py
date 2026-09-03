@@ -227,7 +227,7 @@ def verify_reset(env: CyberEnvironment) -> bool:
 
 
 def main() -> int:
-    env = CyberEnvironment()
+    env = CyberEnvironment("credential_compromise")
     state = env.get_state()
 
     print_organization(state)
