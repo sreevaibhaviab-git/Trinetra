@@ -12,7 +12,7 @@ Time never comes from the wall clock, nothing sleeps, and nothing is random.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.models.environment import (
     EnvironmentState,
@@ -52,6 +52,9 @@ class CyberEnvironment:
         self.faults: Dict[str, bool] = dict(faults or {})
         self.safety = SafetyGovernor(self)
         self._event_seq = 0
+        # Called with each processed event, after its telemetry is emitted.
+        # A simulation driver (e.g. the Red Engine) registers its mutations here.
+        self.event_handlers: List[Callable[[ScheduledEvent], None]] = []
 
     def set_fault(self, name: str, enabled: bool = True) -> None:
         """Enable or disable a named, deterministic tool failure."""
@@ -141,12 +144,20 @@ class CyberEnvironment:
         clock = self._state.clock
         now = _parse(clock.current_time)
         due = [e for e in clock.scheduled_events if _parse(e.scheduled_at) <= now]
+        fired: List[ScheduledEvent] = []
         for event in due:
+            # A handler may emergency-stop mid-batch; the rest of the queue is
+            # then left alone (the governor cancels what it needs to).
+            if self._state.safety.mutations_locked or event not in clock.scheduled_events:
+                break
             clock.scheduled_events.remove(event)
             event.status = ScheduledEventStatus.PROCESSED
             clock.processed_events.append(event)
             self._emit_telemetry(event)
-        return due
+            for handler in self.event_handlers:
+                handler(event)
+            fired.append(event)
+        return fired
 
     def _emit_telemetry(self, event: ScheduledEvent) -> None:
         """Record a processed event on the unified telemetry bus."""

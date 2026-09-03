@@ -673,6 +673,15 @@ class EnvironmentState:
         a defender never carries scenario truth.
         """
         snapshot = _plain(asdict(self))
-        if not include_hidden:
-            snapshot.pop("hidden", None)
+        if include_hidden:
+            return snapshot
+        snapshot.pop("hidden", None)
+        # The queue is simulation machinery: a defender may see that events are
+        # pending and when, never what a simulation driver named or staged them.
+        clock = snapshot.get("clock", {})
+        for key in ("scheduled_events", "processed_events", "cancelled_events"):
+            clock[key] = [
+                {"event_id": e["event_id"], "scheduled_at": e["scheduled_at"], "status": e["status"]}
+                for e in clock.get(key, [])
+            ]
         return snapshot
