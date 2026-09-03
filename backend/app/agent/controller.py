@@ -90,8 +90,12 @@ class TrinetraAgent:
         max_steps: int = MAX_STEPS,
         client: Any = None,
         on_event: Optional[EventSink] = None,
+        action_gate: Optional[Callable[[str, Dict[str, Any], str], Optional[str]]] = None,
     ) -> None:
         self.env = env
+        # Copilot mode supplies a gate: it records the proposed action and returns
+        # a refusal reason, so no state-changing tool runs without a human.
+        self.action_gate = action_gate
         _load_env()
         self.model = model or os.environ.get("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
         self.fallback_model = (
@@ -317,6 +321,7 @@ class TrinetraAgent:
             # ── execute the requested tools ──────────────────────
             response_parts = []
             adapt_note = ""
+            gated = False
             acted_this_cycle = False
             world_advanced = False
             for call in calls:
@@ -344,6 +349,30 @@ class TrinetraAgent:
                         )
                     )
                     continue
+
+                if kind == "defensive" and self.action_gate is not None:
+                    detail = self.action_gate(name, args, _shorten(rationale, 400))
+                    if detail:
+                        self._emit(
+                            state,
+                            Phase.ACT,
+                            f"Proposed {name}" + (f" on {target}" if target else "")
+                            + " — awaiting human approval.",
+                            tool=name,
+                            target=target or None,
+                        )
+                        response_parts.append(
+                            types.Part.from_function_response(
+                                name=name,
+                                response={
+                                    "success": False,
+                                    "error": "APPROVAL_REQUIRED",
+                                    "detail": detail,
+                                },
+                            )
+                        )
+                        gated = True
+                        continue
 
                 if kind == "defensive":
                     state.status = AgentStatus.CONTAINING
@@ -481,6 +510,10 @@ class TrinetraAgent:
                         },
                     )
                 )
+
+            if gated:
+                state.summary = _shorten(rationale, 600) or "Recommendation prepared."
+                break
 
             if not world_advanced:
                 self._advance_world(state)

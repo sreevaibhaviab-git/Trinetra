@@ -45,7 +45,7 @@ body {
 /* ── small uppercase instrument label ─────────────────────────── */
 @utility label {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10.5px;
   line-height: 1;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -144,4 +144,11 @@ body {
 
 ::selection {
   background: rgba(79, 196, 216, 0.22);
+}
+
+/* radar sweep for the landing field */
+@keyframes tn-sweep {
+  to {
+    transform: rotate(360deg);
+  }
 }

@@ -1,4 +1,4 @@
-import type { Tone } from "@/src/data/mockIncident";
+import type { Tone } from "@/src/lib/view";
 
 export const toneText: Record<Tone, string> = {
   ice: "text-ice",
@@ -56,12 +56,12 @@ export function SectionHead({
 }) {
   return (
     <div
-      className={`flex h-8 shrink-0 items-center justify-between border-b border-line px-3 ${className}`}
+      className={`flex h-9 shrink-0 items-center justify-between border-b border-line px-3 ${className}`}
     >
-      <span className="font-mono text-[10px] tracking-[0.18em] text-ink-2 uppercase">
+      <span className="truncate font-mono text-[12px] tracking-[0.18em] whitespace-nowrap text-ink-2 uppercase">
         {title}
       </span>
-      {right ? <div className="flex items-center gap-3">{right}</div> : null}
+      {right ? <div className="flex shrink-0 items-center gap-3 whitespace-nowrap">{right}</div> : null}
     </div>
   );
 }
@@ -85,14 +85,8 @@ export function TickMeter({
         return (
           <span
             key={i}
-            className={
-              on
-                ? hot
-                  ? toneBg[tone]
-                  : "bg-line-3"
-                : "bg-line"
-            }
-            style={{ width: 3, height: i % 7 === 0 ? 12 : 8 }}
+            className={on ? (hot ? toneBg[tone] : "bg-line-3") : "bg-line"}
+            style={{ width: 3.5, height: i % 7 === 0 ? 14 : 9 }}
           />
         );
       })}

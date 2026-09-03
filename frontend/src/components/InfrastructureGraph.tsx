@@ -1,19 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { Dashboard } from "@/src/lib/api";
 import {
-  graphEdges,
-  graphFooter,
-  graphNodes,
-  graphStats,
+  buildGraph,
+  buildTrainingGraph,
   type GraphEdge,
   type GraphNode,
   type NodeStatus,
-} from "@/src/data/mockIncident";
+} from "@/src/lib/view";
 import { SectionHead } from "@/src/components/StatusIndicator";
 
-const HW = 75; // node half-width  (px)
-const HH = 30; // node half-height (px)
+const HW = 84; // node half-width  (px)
+const HH = 33; // node half-height (px)
 
 const statusChrome: Record<
   NodeStatus,
@@ -107,14 +106,14 @@ function NodeCard({ node, index }: { node: GraphNode; index: number }) {
       style={{ left: `${node.x * 100}%`, top: `${node.y * 100}%` }}
     >
       <div
-        className={`relative -translate-x-1/2 -translate-y-1/2 border ${c.box} w-[150px] transition-colors duration-200 group-hover:border-line-3`}
+        className={`relative -translate-x-1/2 -translate-y-1/2 border ${c.box} w-[168px] transition-colors duration-200 group-hover:border-line-3`}
       >
         <span className={`absolute top-0 bottom-0 left-0 w-[2px] ${c.rule}`} />
         <div className="flex items-baseline justify-between px-2.5 pt-[7px]">
-          <span className={`text-[12px] leading-none font-medium ${c.name}`}>
+          <span className={`text-[13.5px] leading-none font-medium ${c.name}`}>
             {node.name}
           </span>
-          <span className="tnum text-[9px] text-dim">
+          <span className="tnum text-[10.5px] text-dim">
             ast-{String(index + 1).padStart(2, "0")}
           </span>
         </div>
@@ -129,25 +128,25 @@ function NodeCard({ node, index }: { node: GraphNode; index: number }) {
               }`}
             />
             <span
-              className={`font-mono text-[9px] tracking-[0.16em] ${statusLabel[node.status]}`}
+              className={`font-mono text-[10.5px] tracking-[0.16em] ${statusLabel[node.status]}`}
             >
-              {node.status}
+              {node.statusLabel ?? node.status}
             </span>
           </span>
-          <span className="tnum text-[9px] text-dim">{node.chip}</span>
+          <span className="tnum text-[10.5px] text-dim">{node.chip}</span>
         </div>
       </div>
 
       {/* hover instrumentation */}
       <div
-        className={`pointer-events-none absolute top-[22px] z-30 w-[196px] border border-line-2 bg-raised px-2.5 py-2 opacity-0 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-opacity duration-150 group-hover:opacity-100 ${
+        className={`pointer-events-none absolute top-[22px] z-30 w-[214px] border border-line-2 bg-raised px-2.5 py-2 opacity-0 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-opacity duration-150 group-hover:opacity-100 ${
           flipped ? "right-[84px]" : "left-[84px]"
         }`}
       >
         {node.meta.map(([k, v]) => (
           <div key={k} className="flex items-baseline justify-between gap-3 py-[3px]">
             <span className="label">{k}</span>
-            <span className="tnum text-[10px] text-ink-2">{v}</span>
+            <span className="tnum text-[11.5px] text-ink-2">{v}</span>
           </div>
         ))}
       </div>
@@ -155,7 +154,13 @@ function NodeCard({ node, index }: { node: GraphNode; index: number }) {
   );
 }
 
-export default function InfrastructureGraph() {
+export default function InfrastructureGraph({
+  dashboard,
+  fog = false,
+}: {
+  dashboard: Dashboard;
+  fog?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -170,8 +175,27 @@ export default function InfrastructureGraph() {
     return () => ro.disconnect();
   }, []);
 
+  const { nodes: graphNodes, edges: graphEdges } = fog
+    ? buildTrainingGraph(dashboard)
+    : buildGraph(dashboard);
   const byId = new Map(graphNodes.map((n) => [n.id, n]));
   const ready = size.w > 0 && size.h > 0;
+
+  const affected = graphNodes.filter(
+    (n) => n.status === "AFFECTED" || n.status === "CRITICAL",
+  ).length;
+  const graphStats = [
+    { k: "ASSETS", v: String(graphNodes.length).padStart(2, "0") },
+    { k: fog ? "WITH EVIDENCE" : "AFFECTED", v: String(affected).padStart(2, "0") },
+    { k: "ISOLATED", v: String(dashboard.endpoints.filter((e) => e.isolated).length).padStart(2, "0") },
+  ];
+  const graphFooter = [
+    { k: "SCENARIO", v: dashboard.environment.scenario },
+    { k: "CLOCK", v: dashboard.environment.simulation_time.slice(11, 19) },
+    { k: "ATTACK", v: dashboard.attack.status },
+    { k: "GOVERNOR", v: dashboard.safety.simulation_status },
+    { k: "TELEMETRY", v: `${dashboard.attack.telemetry_events} EV` },
+  ];
 
   return (
     <section className="flex min-h-0 flex-col bg-base">
@@ -181,7 +205,7 @@ export default function InfrastructureGraph() {
           <>
             {graphStats.map((s) => (
               <span key={s.k} className="flex items-baseline gap-1.5">
-                <span className="tnum text-[10px] text-ink-2">{s.v}</span>
+                <span className="tnum text-[11.5px] text-ink-2">{s.v}</span>
                 <span className="label">{s.k}</span>
               </span>
             ))}
@@ -199,11 +223,17 @@ export default function InfrastructureGraph() {
         {/* legend */}
         <div className="pointer-events-none absolute bottom-3 left-4 z-20 flex flex-col gap-[5px]">
           {(
-            [
-              ["NOMINAL", "bg-good/70"],
-              ["AFFECTED", "bg-warn"],
-              ["CRITICAL", "bg-crit"],
-            ] as const
+            (fog
+              ? ([
+                  ["NOMINAL", "bg-good/70"],
+                  ["ACTIVITY DETECTED", "bg-warn"],
+                  ["SUSPICIOUS", "bg-warn"],
+                ] as const)
+              : ([
+                  ["NOMINAL", "bg-good/70"],
+                  ["AFFECTED", "bg-warn"],
+                  ["CRITICAL", "bg-crit"],
+                ] as const))
           ).map(([k, c]) => (
             <span key={k} className="flex items-center gap-1.5">
               <span className={`inline-block h-[5px] w-[5px] ${c}`} />
@@ -214,13 +244,16 @@ export default function InfrastructureGraph() {
 
         {/* zone annotations */}
         <span className="pointer-events-none absolute top-[7%] left-4 label">
-          UNTRUSTED
+          ENDPOINTS
         </span>
         <span className="pointer-events-none absolute top-[7%] left-[46%] label">
           CONTROL PLANE
         </span>
         <span className="pointer-events-none absolute top-[7%] right-[6%] label text-crit/55!">
           DATA PLANE
+        </span>
+        <span className="pointer-events-none absolute right-4 bottom-3 z-20 label">
+          {fog ? "FOG OF WAR · EVIDENCE ONLY" : "OBSERVABLE EVIDENCE ONLY"}
         </span>
 
         {ready ? (
@@ -304,19 +337,25 @@ export default function InfrastructureGraph() {
         ))}
       </div>
 
-      <div className="flex h-8 shrink-0 items-stretch border-t border-line bg-panel">
+      <div className="flex h-9 shrink-0 items-stretch border-t border-line bg-panel">
         {graphFooter.map((f) => (
           <span
             key={f.k}
             className="flex items-center gap-2 border-r border-line px-3 last:border-r-0"
           >
             <span className="label">{f.k}</span>
-            <span className="tnum text-[10px] text-ink-2">{f.v}</span>
+            <span className="tnum text-[11.5px] text-ink-2">{f.v}</span>
           </span>
         ))}
         <span className="ml-auto flex items-center gap-2 px-3">
           <span className="label">SYNC</span>
-          <span className="tnum text-[10px] text-good">STREAMING</span>
+          <span
+            className={`tnum text-[11.5px] ${
+              dashboard.safety.emergency_stopped ? "text-crit" : "text-good"
+            }`}
+          >
+            {dashboard.safety.emergency_stopped ? "HALTED" : "STREAMING"}
+          </span>
         </span>
       </div>
     </section>

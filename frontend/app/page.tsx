@@ -1,19 +1,35 @@
-import AgentExecution from "@/src/components/AgentExecution";
-import CommandBar from "@/src/components/CommandBar";
-import CommanderConsole from "@/src/components/CommanderConsole";
-import IncidentIntelligence from "@/src/components/IncidentIntelligence";
-import InfrastructureGraph from "@/src/components/InfrastructureGraph";
+"use client";
+
+import AttackLab from "@/src/screens/AttackLab";
+import CommandCenter from "@/src/screens/CommandCenter";
+import Debrief from "@/src/screens/Debrief";
+import InitializeRange from "@/src/screens/InitializeRange";
+import Landing from "@/src/screens/Landing";
+import ModeSelect from "@/src/screens/ModeSelect";
+import { SessionProvider, useSession } from "@/src/state/session";
+
+function Stage() {
+  const { stage } = useSession();
+  switch (stage) {
+    case "LANDING":
+      return <Landing />;
+    case "INITIALIZE":
+      return <InitializeRange />;
+    case "MODE_SELECT":
+      return <ModeSelect />;
+    case "ATTACK_LAB":
+      return <AttackLab />;
+    case "COMMAND_CENTER":
+      return <CommandCenter />;
+    case "DEBRIEF":
+      return <Debrief />;
+  }
+}
 
 export default function Console() {
   return (
-    <main className="flex h-screen flex-col overflow-hidden">
-      <CommandBar />
-      <div className="grid min-h-0 flex-1 grid-cols-[27fr_48fr_25fr] divide-x divide-line">
-        <CommanderConsole />
-        <InfrastructureGraph />
-        <IncidentIntelligence />
-      </div>
-      <AgentExecution />
-    </main>
+    <SessionProvider>
+      <Stage />
+    </SessionProvider>
   );
 }
